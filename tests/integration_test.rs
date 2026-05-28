@@ -5,7 +5,7 @@ use soroban_sdk::{
     token::{Client as TokenClient, StellarAssetClient},
     vec, Address, Env, IntoVal, Vec as SorobanVec,
 };
-use stellar_royalty_splitter::RoyaltySplitterClient;
+use stellar_royalty_splitter::{DataKey, RoyaltySplitterClient};
 
 fn setup(env: &Env) -> (Address, RoyaltySplitterClient) {
     let contract_id = env.register_contract(None, stellar_royalty_splitter::RoyaltySplitter);
@@ -659,4 +659,125 @@ fn test_distribute_secondary_fuzz_style() {
         );
         assert_eq!(client.get_secondary_pool(), 0, "Secondary pool must be zero after distribution");
     }
+}
+
+// ── Issue #242: admin_transfer ───────────────────────────────────────────────
+
+fn read_admin(env: &Env, contract_id: &Address) -> Address {
+    env.as_contract(contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("admin not set")
+    })
+}
+
+#[test]
+fn test_admin_transfer_updates_admin() {
+    let env = Env::default();
+    let (contract_id, client) = setup(&env);
+
+    let admin = Address::generate(&env);
+    let b = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(
+        &vec![&env, admin.clone(), b],
+        &vec![&env, 5000_u32, 5000_u32],
+    );
+
+    env.mock_auths(&[MockAuth {
+        address: &admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "admin_transfer",
+            args: (&new_admin,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.admin_transfer(&new_admin);
+
+    assert_eq!(read_admin(&env, &contract_id), new_admin);
+}
+
+#[test]
+fn test_admin_transfer_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, client) = setup(&env);
+
+    let admin = Address::generate(&env);
+    let b = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    client.initialize(
+        &vec![&env, admin.clone(), b],
+        &vec![&env, 5000_u32, 5000_u32],
+    );
+    client.admin_transfer(&new_admin);
+
+    let events = env.events().all();
+    let found = events.iter().any(|(cid, topics, data)| {
+        cid == contract_id
+            && topics
+                == vec![
+                    &env,
+                    symbol_short!("royalty").into_val(&env),
+                    symbol_short!("admin_xfr").into_val(&env),
+                ]
+            && data == (admin, new_admin).into_val(&env)
+    });
+    assert!(found, "admin_xfr event not emitted");
+}
+
+#[test]
+#[should_panic]
+fn test_admin_transfer_requires_admin_auth() {
+    let env = Env::default();
+    let (contract_id, client) = setup(&env);
+
+    let admin = Address::generate(&env);
+    let b = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(
+        &vec![&env, admin, b],
+        &vec![&env, 5000_u32, 5000_u32],
+    );
+
+    // No mock auths for admin_transfer — must panic on require_auth
+    client.admin_transfer(&new_admin);
+}
+
+// ── Issue #236: empty recipients guard on distribute ─────────────────────────
+
+/// Calling distribute with an empty collaborators list must panic before transfers.
+#[test]
+#[should_panic(expected = "recipients list cannot be empty")]
+fn test_distribute_empty_recipients_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, client) = setup(&env);
+
+    let admin = Address::generate(&env);
+    let b = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = make_token(&env, &token_admin);
+
+    client.initialize(
+        &vec![&env, admin.clone(), b],
+        &vec![&env, 5000_u32, 5000_u32],
+    );
+    mint(&env, &token, &contract_id, 1000);
+
+    let empty_collaborators: SorobanVec<Address> = vec![&env];
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::Collaborators, &empty_collaborators);
+    });
+
+    client.distribute(&token);
 }

@@ -176,6 +176,36 @@ impl RoyaltySplitter {
         env.storage().instance().set(&DataKey::Paused, &true);
     }
 
+    /// Transfer admin rights to a new address.
+    ///
+    /// # Arguments
+    /// * `new_admin` - Address that will become the contract admin.
+    ///
+    /// # Authorization
+    /// Requires signature from the current admin.
+    ///
+    /// # Panics
+    /// * `"contract not initialized"` — called before `initialize`
+    pub fn admin_transfer(env: Env, new_admin: Address) {
+        env.storage().instance().extend_ttl(MIN_TTL, MAX_TTL);
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("contract not initialized");
+
+        admin.require_auth();
+
+        let previous_admin = admin.clone();
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+
+        env.events().publish(
+            (symbol_short!("royalty"), symbol_short!("admin_xfr")),
+            (previous_admin, new_admin),
+        );
+    }
+
     /// Unpause the contract — re-enables `distribute` and `distribute_secondary_royalties`.
     ///
     /// # Authorization
@@ -244,6 +274,9 @@ impl RoyaltySplitter {
     ///
     /// # Authorization
     /// Requires admin signature
+    ///
+    /// # Panics
+    /// * `"recipients list cannot be empty"` — no collaborators are configured
     pub fn distribute(env: Env, token: Address) {
         env.storage().instance().extend_ttl(MIN_TTL, MAX_TTL);
 
@@ -259,6 +292,16 @@ impl RoyaltySplitter {
             panic!("contract is paused");
         }
 
+        let collaborators: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Collaborators)
+            .expect("no collaborators");
+
+        if collaborators.is_empty() {
+            panic!("recipients list cannot be empty");
+        }
+
         if Self::get_total_shares(env.clone()) != 10_000 {
             panic!("total shares must sum to 10000");
         }
@@ -268,12 +311,6 @@ impl RoyaltySplitter {
         if amount == 0 {
             panic!("no balance to distribute");
         }
-
-        let collaborators: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::Collaborators)
-            .expect("no collaborators");
 
         let share_map: Map<Address, u32> = env
             .storage()
