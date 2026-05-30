@@ -1223,11 +1223,11 @@ fn test_set_default_recipients_emits_event() {
                 == vec![
                     &env,
                     symbol_short!("default").into_val(&env),
-                    symbol_short!("recipients_set").into_val(&env),
+                    symbol_short!("recip_set").into_val(&env),
                 ]
             && data == 2_u32.into_val(&env)
     });
-    assert!(found, "recipients_set event not emitted");
+    assert!(found, "recip_set event not emitted");
 }
 
 /// Test get_default_recipients returns empty when not set
@@ -1807,6 +1807,53 @@ fn test_auth_req_event_emitted_on_initialize() {
     );
 }
 
+// ── Issue #290: get_admin ───────────────────────────────────────────────────
+
+#[test]
+fn test_get_admin_returns_initial_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, client) = setup(&env);
+
+    let admin = Address::generate(&env);
+    let b = Address::generate(&env);
+    client.initialize(
+        &vec![&env, admin.clone(), b],
+        &vec![&env, 5000_u32, 5000_u32],
+    );
+
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_get_admin_reflects_admin_transfer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, client) = setup(&env);
+
+    let admin = Address::generate(&env);
+    let b = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    client.initialize(
+        &vec![&env, admin.clone(), b],
+        &vec![&env, 5000_u32, 5000_u32],
+    );
+    assert_eq!(client.get_admin(), admin);
+
+    client.admin_transfer(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+}
+
+#[test]
+#[should_panic(expected = "contract not initialized")]
+fn test_get_admin_before_initialize_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, client) = setup(&env);
+    client.get_admin();
+}
+
 // ── Issue #286: contract version ────────────────────────────────────────────
 
 #[test]
@@ -1820,7 +1867,6 @@ fn test_get_version_stored_on_initialize() {
     client.initialize(&vec![&env, admin, b], &vec![&env, 5000_u32, 5000_u32]);
 
     assert_eq!(client.get_version(), String::from_str(&env, VERSION));
-    assert_eq!(client.version(), client.get_version());
 }
 
 #[test]

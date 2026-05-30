@@ -68,13 +68,7 @@ impl RoyaltySplitter {
     /// Requires signature from `collaborators[0]` (the admin).
     ///
     /// # Panics
-    /// * `"already initialized"` — contract has already been set up
-    /// * `"need at least one collaborator"` — empty collaborator list
-    /// * `"too many recipients: maximum 10 allowed"` — more than 10 recipients
-    /// * `"collaborators and shares length mismatch"` — vec lengths differ
-    /// * `"shares must sum to 10000"` — allocations don't total 100%
-    /// * `"share cannot be zero"` — any individual share is 0
-    /// * `"duplicate collaborator address"` — same address appears more than once
+    /// On invalid collaborators/shares, duplicate addresses, or re-initialization.
     pub fn initialize(env: Env, collaborators: Vec<Address>, shares: Vec<u32>) {
         env.storage().instance().extend_ttl(MIN_TTL, MAX_TTL);
 
@@ -284,20 +278,25 @@ impl RoyaltySplitter {
         env.storage().instance().has(&StorageKey::Admin)
     }
 
+    /// Returns the current contract admin address.
+    ///
+    /// Read-only view for integrators and frontends.
+    ///
+    /// # Panics
+    /// * `"contract not initialized"` — called before `initialize`
+    pub fn get_admin(env: Env) -> Address {
+        env.storage().instance().extend_ttl(MIN_TTL, MAX_TTL);
+        env.storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .expect("contract not initialized")
+    }
+
     /// Returns the contract's current on-chain balance of `token`.
     ///
     /// # Arguments
     /// * `token` - The token contract address to query.
     pub fn get_balance(env: Env, token: Address) -> i128 {
-        env.storage().instance().extend_ttl(MIN_TTL, MAX_TTL);
-        token::Client::new(&env, &token).balance(&env.current_contract_address())
-    }
-
-    /// Alias for `get_balance`. Returns the contract's on-chain balance of `token`.
-    ///
-    /// # Arguments
-    /// * `token` - The token contract address to query.
-    pub fn get_token_balance(env: Env, token: Address) -> i128 {
         env.storage().instance().extend_ttl(MIN_TTL, MAX_TTL);
         token::Client::new(&env, &token).balance(&env.current_contract_address())
     }
@@ -327,7 +326,7 @@ impl RoyaltySplitter {
             .set(&StorageKey::DefaultRecipients, &recipients);
 
         env.events().publish(
-            (symbol_short!("default"), symbol_short!("recipients_set")),
+            (symbol_short!("default"), symbol_short!("recip_set")),
             recipients.len(),
         );
     }
@@ -603,7 +602,7 @@ impl RoyaltySplitter {
     /// * `"contract is paused"` — contract is currently paused
     pub fn distribute(env: Env, token: Address) {
         // Call the enhanced version with empty override for backward compatibility
-        Self::distribute_with_override(env, token, Vec::new(&env));
+        Self::distribute_with_override(env.clone(), token, Vec::new(&env));
     }
 
     /// Record a secondary royalty payment transferred from a resale.
@@ -840,11 +839,6 @@ impl RoyaltySplitter {
             .instance()
             .get(&StorageKey::ContractVersion)
             .expect("contract not initialized")
-    }
-
-    /// Backward-compatible alias for [`get_version`].
-    pub fn version(env: Env) -> String {
-        Self::get_version(env)
     }
 
     /// Returns the basis-point share for a registered collaborator.
