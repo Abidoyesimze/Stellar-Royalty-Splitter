@@ -102,8 +102,9 @@ export default function CollaboratorTable({ contractId, refreshKey }: Props) {
                 </span>
                 <button
                   className="copy-btn-sm"
-                  onClick={() => navigator.clipboard.writeText(c.address)}
-                  title="Copy address"
+                  onClick={() => copyAddress(c.address)}
+                  title={copied === c.address ? "Address copied" : "Copy address"}
+                  aria-label={copied === c.address ? "Address copied" : "Copy collaborator address"}
                 >
                   ⧉
                 </button>
