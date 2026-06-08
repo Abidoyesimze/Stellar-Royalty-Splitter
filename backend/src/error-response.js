@@ -30,5 +30,6 @@ export function sendError(res, status, code, message, extra = {}) {
 }
 
 export function sendValidationError(res, issues) {
-  return sendError(res, 400, "validation_failed", "Validation failed", { details: issues });
+  const firstMessage = issues.length > 0 ? issues[0].message : "Validation failed";
+  return sendError(res, 400, "validation_failed", firstMessage, { details: issues });
 }

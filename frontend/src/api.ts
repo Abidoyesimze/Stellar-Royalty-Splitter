@@ -86,7 +86,12 @@ export class BackendApiError extends Error {
 
 function readErrorBody(status: number, data: unknown): BackendApiError {
   const parsed = extractContractError(data ?? { error: "Request failed" });
-  return new BackendApiError(status, parsed.code, parsed.message, parsed.details);
+  return new BackendApiError(
+    status,
+    parsed.code,
+    parsed.message,
+    parsed.details,
+  );
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
@@ -99,16 +104,6 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 async function get<T>(path: string): Promise<T> {
   return request<T>(path);
-  const data = await res.json();
-  if (!res.ok) throw readErrorBody(res.status, data);
-  return data as T;
-}
-
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
-  const data = await res.json();
-  if (!res.ok) throw readErrorBody(res.status, data);
-  return data as T;
 }
 
 export interface TransactionRecord {
@@ -317,9 +312,9 @@ export const api = {
     ),
 
   getContractVersion: (contractId: string) =>
-    get<{ version: string }>(`/contract/version/${contractId}`),
-  getContractVersion: (contractId: string) =>
-    get<{ contractId: string; version: string }>(`/contract/version/${contractId}`),
+    get<{ contractId: string; version: string }>(
+      `/contract/version/${contractId}`,
+    ),
 
   // NEW: Fetch royalty rate from contract
   getRoyaltyRate: (contractId: string) =>

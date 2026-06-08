@@ -1,9 +1,13 @@
 import { z } from "zod";
 import { sendError, sendValidationError } from "./error-response.js";
 
-export const stellarAddress = z.string().regex(/^G[A-Z2-7]{55}$/, "Invalid Stellar address");
+export const stellarAddress = z
+  .string("Validation failed: walletAddress must be a string")
+  .regex(/^G[A-Z2-7]{55}$/, "Validation failed: Invalid Stellar address");
 
-export const contractAddress = z.string().regex(/^C[A-Z2-7]{55}$/, "Invalid contract address");
+export const contractAddress = z
+  .string("Validation failed: contractId must be a string")
+  .regex(/^C[A-Z2-7]{55}$/, "Validation failed: Invalid contract address");
 
 export const basisPoints = z.number().int().min(0).max(10000);
 
@@ -11,7 +15,7 @@ export const initializeSchema = z
   .object({
     contractId: contractAddress,
     walletAddress: stellarAddress,
-    collaborators: z.array(stellarAddress).min(1).max(20),
+    collaborators: z.array(stellarAddress).min(1, "Collaborators array must be non-empty").max(20),
     shares: z.array(basisPoints).min(1).max(20),
   })
   .refine((d) => d.collaborators.length === d.shares.length, {
@@ -80,10 +84,13 @@ export function validate(schema) {
   return (req, res, next) => {
     const result = schema.safeParse(req.body);
     if (!result.success) {
-      return sendValidationError(res, result.error.issues.map((e) => ({
-        field: e.path.join("."),
-        message: e.message,
-      })));
+      return sendValidationError(
+        res,
+        result.error.issues.map((e) => ({
+          field: e.path.join("."),
+          message: e.message,
+        }))
+      );
     }
     req.body = result.data;
     next();
