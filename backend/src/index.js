@@ -24,6 +24,7 @@ import { createGracefulShutdownHandler } from "./shutdown.js";
 import { adminRouter } from "./routes/admin.js";
 import { metricsRouter } from "./routes/metrics.js";
 import { initializeSigningKey } from "./signing-key.js";
+import { sendError, normalizeErrorCode } from "./error-response.js";
 
 // Initialize database on startup
 initializeDatabase();
@@ -86,7 +87,7 @@ const generalLimiter = rateLimit({
   max: parseInt(process.env.RATE_LIMIT_MAX ?? "100"),
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Too many requests, please try again later." },
+  handler: (_req, res) => sendError(res, 429, "too_many_requests", "Too many requests, please try again later."),
   skip: (req) => req.path === "/api/v1/health" || req.path === "/api/health",
 });
 
@@ -96,7 +97,7 @@ const writeLimiter = rateLimit({
   max: parseInt(process.env.RATE_LIMIT_WRITE_MAX ?? "10"),
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Too many write requests, please slow down." },
+  handler: (_req, res) => sendError(res, 429, "too_many_requests", "Too many write requests, please slow down."),
 });
 
 app.use(generalLimiter);
@@ -105,7 +106,7 @@ app.use(express.json({ limit: "10kb" }));
 // Enforce Content-Type: application/json on POST requests
 app.use((req, res, next) => {
   if (req.method === "POST" && !req.is("application/json")) {
-    return res.status(415).json({ error: "Content-Type must be application/json" });
+    return sendError(res, 415, "unsupported_media_type", "Content-Type must be application/json");
   }
   next();
 });
@@ -115,7 +116,7 @@ const REQUEST_TIMEOUT_MS = parseInt(process.env.REQUEST_TIMEOUT_MS ?? "30000");
 app.use((req, res, next) => {
   const timer = setTimeout(() => {
     if (!res.headersSent) {
-      res.status(503).json({ error: "Request timed out. Please try again later." });
+      sendError(res, 503, "request_timeout", "Request timed out. Please try again later.");
     }
   }, REQUEST_TIMEOUT_MS);
   res.on("finish", () => clearTimeout(timer));
@@ -148,7 +149,7 @@ const adminLimiter = rateLimit({
   max: parseInt(process.env.RATE_LIMIT_ADMIN_MAX ?? "5"),
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Too many admin requests, please slow down." },
+  handler: (_req, res) => sendError(res, 429, "too_many_requests", "Too many admin requests, please slow down."),
 });
 app.use("/admin", adminLimiter);
 app.use("/admin", adminRouter);
@@ -161,7 +162,7 @@ app.use("/api", (req, res) => {
 // Central error handler
 app.use((err, req, res, _next) => {
   if (err.type === "entity.too.large") {
-    return res.status(413).json({ error: "Payload too large" });
+    return sendError(res, 413, "payload_too_large", "Payload too large");
   }
   logger.error("Unhandled error", {
     correlationId: req.correlationId,
@@ -171,19 +172,16 @@ app.use((err, req, res, _next) => {
 
   // Structured errors thrown by stellar.js (Soroban / RPC errors)
   if (err.status && err.code) {
-    return res.status(err.status).json({
-      error: err.message,
-      code: err.code,
-      ...(err.detail !== undefined && { detail: err.detail }),
+    return sendError(res, err.status, err.code, err.message ?? "Error", {
+      detail: err.detail,
     });
   }
 
-  // Structured errors with status but no code (e.g. validation helpers)
   if (err.status) {
-    return res.status(err.status).json({ error: err.message });
+    return sendError(res, err.status, undefined, err.message ?? "Error");
   }
 
-  res.status(500).json({ error: err.message ?? "Internal server error" });
+  return sendError(res, 500, "internal_server_error", err.message ?? "Internal server error");
 });
 
 const PORT = process.env.PORT ?? 3001;
