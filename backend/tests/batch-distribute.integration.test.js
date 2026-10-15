@@ -243,6 +243,25 @@ describe("POST /api/v1/batch-distribute — integration", () => {
     expect(addAuditLog).toHaveBeenCalledTimes(1);
   });
 
+  test("does not write any transaction records if builder.build() throws", async () => {
+    buildMock.mockRejectedValue(new Error("RPC error"));
+
+    const res = await request(app)
+      .post("/api/v1/batch-distribute")
+      .send({
+        walletAddress: WALLET,
+        operations: [
+          { contractId: CONTRACT_A, tokenId: TOKEN },
+          { contractId: CONTRACT_B, tokenId: TOKEN },
+        ],
+      });
+
+    // Server should return 500 (unhandled error goes to next(err))
+    expect(res.status).toBe(500);
+    // Most importantly: no DB records were written
+    expect(recordTransaction).not.toHaveBeenCalled();
+  });
+
   test("rejects a batch with duplicate contractIds before doing any RPC work", async () => {
     const res = await request(app)
       .post("/api/v1/batch-distribute")

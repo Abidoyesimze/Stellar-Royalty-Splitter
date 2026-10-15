@@ -62,24 +62,28 @@ batchDistributeRouter.post(
         );
       }
 
-      // Record each operation as a pending transaction up front so the
-      // audit trail and history reflect the whole batch even if some
-      // operations fail to build.
+      // Phase 1 — register operations with the builder (no DB writes yet).
       const builder = new BatchTransactionBuilder(walletAddress);
-      const pending = operations.map((op) => {
-        const transactionId = recordTransaction(op.contractId, "distribute", walletAddress, {
-          tokenId: op.tokenId,
-          batch: true,
-        });
+      const preparedOps = operations.map((op) => {
         builder.add({
           contractId: op.contractId,
           method: "distribute",
           args: [addressToScVal(op.tokenId)],
         });
-        return { transactionId, contractId: op.contractId, tokenId: op.tokenId };
+        return { contractId: op.contractId, tokenId: op.tokenId };
       });
 
+      // Phase 2 — build XDR first; only write DB records after a successful build.
       const built = await builder.build();
+
+      // Phase 3 — build succeeded, now record transactions.
+      const pending = preparedOps.map((op) => ({
+        ...op,
+        transactionId: recordTransaction(op.contractId, "distribute", walletAddress, {
+          tokenId: op.tokenId,
+          batch: true,
+        }),
+      }));
 
       const results = built.map((result, i) => {
         const { transactionId, contractId, tokenId } = pending[i];
