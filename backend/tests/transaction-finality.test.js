@@ -53,6 +53,7 @@ const {
   computeBackoffMs,
   startTracking,
   cancelTracking,
+  stopAllTracking,
   isTracking,
   MAX_POLL_DURATION_MS,
   JITTER_FACTOR,
@@ -332,6 +333,67 @@ describe("cancelTracking", () => {
     startTracking({ transactionId: 50, txHash: "g".repeat(64) });
     expect(cancelTracking(50)).toBe(true);
     expect(isTracking(50)).toBe(false);
+  });
+});
+
+// ─── stopAllTracking ──────────────────────────────────────────────────────────
+
+describe("stopAllTracking", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Clear any trackers left over from previous tests
+    stopAllTracking();
+  });
+
+  test("returns 0 when no trackers are active", () => {
+    expect(stopAllTracking()).toBe(0);
+  });
+
+  test("cancels all active trackers and returns the count", () => {
+    createFinalityRecord.mockReturnValue(40);
+    pollHorizonTransaction.mockResolvedValue({ status: "not_found" });
+
+    startTracking({ transactionId: 60, txHash: "h".repeat(64) });
+    startTracking({ transactionId: 61, txHash: "i".repeat(64) });
+    expect(isTracking(60)).toBe(true);
+    expect(isTracking(61)).toBe(true);
+
+    const count = stopAllTracking();
+    expect(count).toBe(2);
+    expect(isTracking(60)).toBe(false);
+    expect(isTracking(61)).toBe(false);
+  });
+
+  test("leaves no trackers active after call", () => {
+    createFinalityRecord.mockReturnValue(50);
+    pollHorizonTransaction.mockResolvedValue({ status: "not_found" });
+
+    startTracking({ transactionId: 70, txHash: "j".repeat(64) });
+    stopAllTracking();
+
+    // Subsequent stopAllTracking call returns 0 (idempotent)
+    expect(stopAllTracking()).toBe(0);
+  });
+
+  test("polling loop does not call DB functions after stopAllTracking", async () => {
+    // Arrange: start tracking a transaction that will poll Horizon
+    createFinalityRecord.mockReturnValue(60);
+    // Horizon always returns not_found so the loop would keep polling
+    pollHorizonTransaction.mockResolvedValue({ status: "not_found" });
+
+    startTracking({ transactionId: 80, txHash: "k".repeat(64) });
+
+    // Act: cancel all trackers immediately
+    stopAllTracking();
+
+    // Allow any in-flight microtasks to complete
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setTimeout(r, 300));
+
+    // Assert: no DB write functions were called after cancellation
+    expect(markFinalityConfirmed).not.toHaveBeenCalled();
+    expect(markFinalityFailed).not.toHaveBeenCalled();
+    expect(markFinalityTimeout).not.toHaveBeenCalled();
   });
 });
 

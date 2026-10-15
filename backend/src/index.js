@@ -79,6 +79,7 @@ import { recordApiKeyRequest } from "./database/rate-limit.js";
 import { createMetricsPusher } from "./metrics-pushgateway.js";
 import { transactionFinalityRouter } from "./routes/transaction-finality.js";
 import { startFinalityCleanupScheduler } from "./jobs/finality-cleanup-job.js";
+import { stopAllTracking } from "./transaction-finality.js";
 import { startPaymentScheduleJob } from "./jobs/payment-schedule-job.js";
 import { startEditSessionCleanup } from "./jobs/edit-session-cleanup.js";
 import { setupGraphQL } from "./graphql.js";
@@ -714,6 +715,7 @@ async function startServer() {
     closeDatabase,
     logger,
     onShutdown: () => {
+      stopAllTracking();
       if (wss) {
         wss.close();
         logger.info("WebSocket server closed");
