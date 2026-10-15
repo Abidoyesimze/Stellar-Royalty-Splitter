@@ -34,6 +34,89 @@ const router = express.Router();
 const VALID_HISTORY_TYPES = ["distribute", "initialize"];
 
 /**
+ * Record the carbon footprint of a confirmed transaction and trigger
+ * opted-in auto-offset purchases (#1064). Dynamic import keeps this route
+ * decoupled from the carbon tracker; failures propagate to the caller's
+ * .catch() so confirmation responses are never affected.
+ */
+async function recordCarbonFootprint(transaction) {
+  const { recordTransactionFootprint, runAutoOffset } = await import(
+    "../services/carbon-tracker.js"
+  );
+  recordTransactionFootprint({
+    contractId: transaction.contractId,
+    walletAddress: transaction.initiatorAddress,
+    txHash: transaction.txHash,
+    transactionId: transaction.id,
+    operationCount: 1 + (transaction.payouts?.length ?? 0),
+  });
+  if (transaction.type === "distribute" || transaction.type === "secondary_distribute") {
+    await runAutoOffset({
+      contractId: transaction.contractId,
+      payouts: (transaction.payouts ?? []).map((payout) => ({
+        address: payout.collaboratorAddress,
+        amountStroops: payout.amountReceived,
+      })),
+      txHash: transaction.txHash,
+    });
+  }
+}
+
+/**
+ * Emit a signed `distribution.completed` event for a confirmed
+ * distribution (#1059). Dynamic import keeps this route decoupled from
+ * the webhook manager; failures propagate to the caller's .catch().
+ */
+async function emitDistributionCompleted(transaction) {
+  const { emitWebhookEvent } = await import("../services/webhook-manager.js");
+  await emitWebhookEvent({
+    contractId: transaction.contractId,
+    event: "distribution.completed",
+    data: {
+      transactionHash: transaction.txHash,
+      tokenId: transaction.tokenId,
+      requestedAmount: transaction.requestedAmount,
+      status: transaction.status,
+      recipients: (transaction.payouts ?? []).map((payout) => ({
+        address: payout.collaboratorAddress,
+        amount: payout.amountReceived,
+      })),
+      timestamp: transaction.blockTime ?? transaction.timestamp,
+    },
+  });
+}
+
+async function emitSecondaryDistributionCompleted(transaction) {
+  const { emitWebhookEvent } = await import("../services/webhook-manager.js");
+  await emitWebhookEvent({
+    contractId: transaction.contractId,
+    event: "distribution.completed",
+    data: {
+      transactionHash: transaction.txHash,
+      tokenId: transaction.tokenId,
+      kind: "secondary",
+      requestedAmount: transaction.requestedAmount,
+      status: transaction.status,
+      timestamp: transaction.blockTime ?? transaction.timestamp,
+    },
+  });
+}
+
+async function emitContractStatusChanged(transaction, previousInitialized, newInitialized) {
+  const { emitWebhookEvent } = await import("../services/webhook-manager.js");
+  await emitWebhookEvent({
+    contractId: transaction.contractId,
+    event: "contract.status.changed",
+    data: {
+      transactionHash: transaction.txHash,
+      previousStatus: { initialized: previousInitialized },
+      newStatus: { initialized: newInitialized },
+      timestamp: transaction.blockTime ?? transaction.timestamp,
+    },
+  });
+}
+
+/**
  * GET /api/history/:contractId
  * Get transaction history for a contract.
  * Query params: limit (default 50, max 100), offset (default 0), type (distribute|initialize)
@@ -371,6 +454,42 @@ router.post("/transaction/confirm/:txHash", async (req, res) => {
 
     if (pollResult.status === "confirmed" && confirmed?.type === "distribute") {
       deliverDistributeWebhooks(confirmed);
+      // Advanced webhook system (#1059): fan out the signed
+      // `distribution.completed` event to subscribed webhooks. Fail-open —
+      // delivery problems must never fail the confirmation response.
+      emitDistributionCompleted(confirmed).catch((err) => {
+        logger.warn("Failed to emit distribution.completed webhook event", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
+    if (pollResult.status === "confirmed" && confirmed?.type === "secondary_distribute") {
+      // Secondary royalty distributions complete here (#1059).
+      emitSecondaryDistributionCompleted(confirmed).catch((err) => {
+        logger.warn("Failed to emit secondary distribution webhook event", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
+    if (pollResult.status === "confirmed" && confirmed?.type === "initialize") {
+      // The contract moved from uninitialized to initialized (#1059).
+      emitContractStatusChanged(confirmed, false, true).catch((err) => {
+        logger.warn("Failed to emit contract.status.changed webhook event", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
+    if (pollResult.status === "confirmed" && confirmed) {
+      // Carbon tracking (#1064): record the transaction footprint and run
+      // opted-in auto-offsets. Fail-open — never fail the confirmation.
+      recordCarbonFootprint(confirmed).catch((err) => {
+        logger.warn("Failed to record carbon footprint", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
 
     res.json({

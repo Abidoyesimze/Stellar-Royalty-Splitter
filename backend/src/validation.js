@@ -152,6 +152,21 @@ export const emailDigestPreferencesSchema = z.object({
   hourOfDay: z.number().int().min(0).max(23).optional(),
 });
 
+export const WEBHOOK_EVENT_NAMES = [
+  "distribution.completed",
+  "distribute.confirmed",
+  "dispute.created",
+  "dispute.resolved",
+  "governance.vote.started",
+  "governance.vote.ended",
+  "contract.status.changed",
+];
+
+export const webhookEventsSchema = z
+  .array(z.enum(WEBHOOK_EVENT_NAMES))
+  .min(1, "events must contain at least one event name")
+  .max(WEBHOOK_EVENT_NAMES.length, "events contains duplicate or unknown entries");
+
 export const webhookRegisterSchema = z.object({
   url: z
     .string()
@@ -159,6 +174,51 @@ export const webhookRegisterSchema = z.object({
     .refine((value) => value.startsWith("https://"), {
       message: "Webhook URL must use HTTPS",
     }),
+  // #1059: optional per-webhook event subscription. Omitted (or empty) =
+  // subscribe to all events (legacy behavior preserved).
+  events: z.array(z.enum(WEBHOOK_EVENT_NAMES)).optional(),
+});
+
+export const webhookEmitSchema = z.object({
+  event: z.enum(WEBHOOK_EVENT_NAMES),
+  data: z.record(z.any()).optional().default({}),
+});
+
+/**
+ * Query params for GET /webhooks/:contractId/deliveries (#1059).
+ * Extends the standard pagination shape with optional delivery filters.
+ * NOTE: a dedicated schema (rather than `paginationSchema`) is required
+ * because validateQuery() replaces req.query with the parsed value and
+ * zod strips unknown keys — using paginationSchema here would silently
+ * drop webhookId/event/status.
+ */
+export const webhookDeliveriesQuerySchema = z.object({
+  limit: z.coerce
+    .number({ invalid_type_error: "limit must be a number" })
+    .int("limit must be an integer")
+    .min(1, "limit must be at least 1")
+    .max(100, "limit must be at most 100")
+    .default(10),
+  offset: z.coerce
+    .number({ invalid_type_error: "offset must be a number" })
+    .int("offset must be an integer")
+    .min(0, "offset must be >= 0")
+    .default(0),
+  webhookId: z.coerce
+    .number({ invalid_type_error: "webhookId must be a number" })
+    .int("webhookId must be an integer")
+    .positive("webhookId must be positive")
+    .optional(),
+  event: z
+    .enum([...WEBHOOK_EVENT_NAMES, "webhook.test"], {
+      errorMap: () => ({ message: "Invalid event filter" }),
+    })
+    .optional(),
+  status: z
+    .enum(["pending", "delivered", "failed", "exhausted"], {
+      errorMap: () => ({ message: "status must be one of: pending, delivered, failed, exhausted" }),
+    })
+    .optional(),
 });
 
 export const transactionConfirmSchema = z.object({
@@ -166,6 +226,47 @@ export const transactionConfirmSchema = z.object({
   blockTime: z.string().optional(),
   errorMessage: z.string().optional(),
   status: z.enum(["pending", "confirmed", "failed"]).optional(),
+});
+
+// ─── Carbon tracking schemas (#1064) ─────────────────────────────────────────
+
+export const carbonRecordSchema = z.object({
+  contractId: contractAddress,
+  walletAddress: stellarAddress,
+  txHash: z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/, "txHash must be 64 hexadecimal characters")
+    .optional(),
+  transactionId: z.number().int().positive().optional(),
+  operationCount: z.number().int().min(1).max(1000).optional().default(1),
+});
+
+export const CARBON_OFFSET_PROJECTS = [
+  "forest",
+  "ocean",
+  "mixed",
+  "amazon-reforestation",
+  "congo-basin-conservation",
+  "pacific-blue-carbon",
+  "kelp-restoration",
+];
+
+export const carbonOffsetSchema = z
+  .object({
+    walletAddress: stellarAddress,
+    contractId: contractAddress.optional(),
+    tonnes: z.number().finite().positive("tonnes must be positive").optional(),
+    amountUsdCents: z.number().int().positive("amountUsdCents must be positive").optional(),
+    project: z.enum(CARBON_OFFSET_PROJECTS).optional().default("mixed"),
+    provider: z.string().min(1).max(64).optional(),
+  })
+  .refine((d) => d.tonnes != null || d.amountUsdCents != null, {
+    message: "Provide tonnes or amountUsdCents",
+  });
+
+export const carbonSettingsSchema = z.object({
+  autoOffsetEnabled: z.boolean(),
+  offsetPercentage: z.number().finite().min(0).max(100),
 });
 
 // ÔöÇÔöÇÔöÇ Dispute / ticket schemas (#607) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ

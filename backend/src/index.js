@@ -38,11 +38,13 @@ import { startHealthMonitor, stopHealthMonitor } from "./database/health-monitor
 import { createGracefulShutdownHandler, shutdownMiddleware } from "./shutdown.js";
 import { adminRouter } from "./routes/admin.js";
 import { snapshotRouter } from "./routes/snapshots.js";
+import apiDocsRouter from "./routes/api-docs.js";
 import { communicationsRouter } from "./routes/communications.js";
 import { metricsRouter } from "./routes/metrics.js";
 import { applicationLogsRouter } from "./routes/application-logs.js";
 import { evaluateLogAlerts, pruneApplicationLogs } from "./database/application-logs.js";
 import { initializeSigningKey } from "./signing-key.js";
+import { initializeKeyManager } from "./services/key-manager.js";
 import { sendError, notFoundHandler, errorHandler } from "./error-response.js";
 import { preferencesRouter } from "./routes/preferences.js";
 import { templatesRouter } from "./routes/templates.js";
@@ -64,6 +66,7 @@ import { csvImportRouter } from "./routes/csv-import.js";
 import { quickbooksRouter } from "./routes/accounting/quickbooks.js";
 import { contributorTaxRouter } from "./routes/contributor-tax.js";
 import { notificationsRouter } from "./routes/notifications.js";
+import { granularPreferencesRouter } from "./routes/notifications/preferences.js";
 import { salesforceRouter } from "./routes/crm/salesforce.js";
 import { hubspotRouter } from "./routes/crm/hubspot.js";
 import { paymentHoldsRouter } from "./routes/payment-holds.js";
@@ -90,6 +93,7 @@ import { setSecondaryRoyaltyPoolSource } from "./metrics.js";
 import { httpMetricsMiddleware } from "./middleware/http-metrics.js";
 import { responseTimeMiddleware } from "./middleware/response-time.js";
 import { createTrafficShadowMiddleware } from "./middleware/traffic-shadow.js";
+import { deprecationTrackingMiddleware, stopDeprecationTracking } from "./middleware/deprecation-tracking.js";
 import { getPendingRoyaltyPools } from "./database/secondary-royalties.js";
 import { initRedisCache } from "./cache.js";
 import { openseaRouter } from "./routes/marketplaces/opensea.js";
@@ -103,10 +107,11 @@ import { sendgridWebhookRouter } from "./routes/webhooks/sendgrid.js";
 import { reputationRouter } from "./routes/reputation.js";
 import { searchRouter } from "./routes/search.js";
 import { zkPrivacyRouter } from "./routes/zk-privacy.js";
-import snapshotRouter from "./routes/governance/snapshot.js";
+import governanceSnapshotRouter from "./routes/governance/snapshot.js";
 import { stripeRouter } from "./routes/payments/stripe.js";
 import { collaborativeEditorRouter } from "./routes/collaborative-editor.js";
 import { vestingRouter } from "./routes/vesting.js";
+import { tokenomicsRouter } from "./routes/tokenomics.js";
 import { oracleRouter } from "./routes/oracle.js";
 import { auditEnhancedRouter } from "./routes/audit-enhanced.js";
 import { swapAggregatorRouter } from "./routes/swap-aggregator.js";
@@ -119,11 +124,16 @@ import { eventsRouter, commandsRouter } from "./routes/events.js";
 import { startL1WarmingScheduler, startL2WarmingScheduler } from "./cache-advanced.js";
 import { rightsRouter } from "./routes/rights-management.js";
 import { treasuryRouter } from "./routes/treasury/index.js";
+import { carbonRouter } from "./routes/carbon.js";
 import { createTrafficShaper } from "./middleware/traffic-shaper.js";
 import { CapacityPlanner } from "./services/capacity-planner.js";
 import { crossChainRouter } from "./routes/cross-chain.js";
+import { attachFeatureFlags } from "./middleware/feature-flag-resolver.js";
+import { automationRouter } from "./routes/automation.js";
+import { featureFlagsRouter } from "./routes/feature-flags.js";
 
 // Initialize database on startup
+await initializeKeyManager({ scheduleRotation: true });
 initializeDatabase();
 initializeSigningKey();
 
@@ -165,6 +175,10 @@ pruneApplicationLogs(process.env.LOG_RETENTION_DAYS);
 startHealthMonitor();
 
 const app = express();
+
+
+const marketplaceDiscoveryRoutes = require('./routes/marketplaces/discovery');
+app.use('/api/v1/marketplaces', marketplaceDiscoveryRoutes);
 
 // Request correlation ID and logging middleware
 app.use((req, res, next) => {
@@ -398,6 +412,9 @@ app.use("/api", (_req, res, next) => {
 app.use(attachRole);
 app.use(attachRbacIdentity);
 
+// Resolve feature flags for every request (#1075)
+app.use(attachFeatureFlags);
+
 // Enforce Content-Type: application/json on POST requests
 app.use((req, res, next) => {
   if (req.method === "POST" && !req.is("application/json")) {
@@ -462,6 +479,9 @@ app.use("/api/v1/analytics/forecast-model", forecastModelRouter);
 app.use("/api/v1", analyticsRouter);
 // Collaborator performance benchmarking (#952)
 app.use("/api/v1/analytics/benchmarking", benchmarkingRouter);
+// Advanced token economics & vesting analytics (#1062)
+app.use("/api/v1/tokenomics", readLimiter);
+app.use("/api/v1/tokenomics", tokenomicsRouter);
 app.use("/api/v1/contract", contractRouter);
 app.use("/api/v1/health", healthRouter);
 app.use(livenessRouter);
@@ -501,6 +521,7 @@ app.use("/api/v1/contributor-tax", contributorTaxRouter);
 
 // Real-time notifications (#594)
 app.use("/api/v1/notifications", notificationsRouter);
+app.use("/api/v1/notifications/preferences", granularPreferencesRouter);
 
 // SMS notification preferences (#927)
 app.use("/api/v1/notifications/sms", smsPreferencesRouter);
@@ -560,19 +581,22 @@ app.use("/api/v1/search", searchRouter);
 // Zero-knowledge proof privacy system (#972)
 app.use("/api/v1/zk-privacy", zkPrivacyRouter);
 
-<<<<<<< HEAD
 // Decentralized governance on Snapshot (#995)
-app.use("/api/v1/governance", snapshotRouter);
-=======
+app.use("/api/v1/governance", governanceSnapshotRouter);
+
 // Batch payment scheduling (#991)
 app.use("/api/v1/schedules", writeLimiter);
 app.use("/api/v1/batch", writeLimiter);
 app.use("/api/v1/schedules", schedulesRouter);
 app.use("/api/v1/batch", batchRouter);
+app.use("/api/v1/automation", automationRouter);
 
 // Cross-chain liquidity pool integration (#cross-chain)
 app.use("/api/v1/cross-chain", writeLimiter);
 app.use("/api/v1/cross-chain", crossChainRouter);
+
+// Advanced feature flags and gradual rollout (#1075)
+app.use("/api/v1/feature-flags", featureFlagsRouter);
 
 // Web3 identity — ENS + Lens (#992)
 app.use("/api/v1/identity", identityRouter);
@@ -590,14 +614,13 @@ app.use("/api/v1/commands", commandsRouter);
 app.use("/api/v1/rights", writeLimiter);
 app.use("/api/v1/rights", rightsRouter);
 
-<<<<<<< HEAD
->>>>>>> upstream/dev
-=======
 // DAO Treasury Management (#1076)
 app.use("/api/v1/treasury", writeLimiter);
 app.use("/api/v1/treasury", treasuryRouter);
 
->>>>>>> upstream/dev
+// Environmental impact tracking and carbon offsets (#1064)
+app.use("/api/v1/carbon", writeLimiter);
+app.use("/api/v1", carbonRouter);
 
 // Admin operations (separate from /api/v1; protected by ADMIN_ROTATE_TOKEN)
 const RATE_LIMIT_ADMIN_WINDOW_MS = 60_000;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { Navigation } from "./components/Navigation";
 import HelpModal from "./components/HelpModal";
 import { OfflineIndicator } from "./components/OfflineIndicator";
@@ -32,14 +32,25 @@ import { api, SESSION_EXPIRED_EVENT } from "./api";
 import { OnboardingWalkthrough } from "./components/OnboardingWalkthrough";
 import { HealthDashboard } from "./components/HealthDashboard";
 import { DisputeDashboard } from "./components/DisputeDashboard";
+// Lazy-loaded to keep the initial bundle under the performance budget
+// (e2e/performance.spec.ts, 9.5 MB). The impact page is not on the initial
+// route, so code-splitting it avoids penalizing first-load transfer size.
+const ImpactDashboard = lazy(() =>
+  import("./components/ImpactDashboard").then((m) => ({
+    default: m.ImpactDashboard,
+  })),
+);
+import { WebhookManager } from "./components/WebhookManager";
 import { EarningsHistoryChart } from "./components/EarningsHistoryChart";
 import { EarningsForecastCalculator } from "./components/EarningsForecastCalculator";
+import { TokenomicsSimulator } from "./components/TokenomicsSimulator";
 import { ContractTimeline } from "./components/ContractTimeline";
 import { ContributorSuspension } from "./components/ContributorSuspension";
 import { BulkContributorUpload } from "./components/BulkContributorUpload";
 import { ContributorTaxInfo } from "./components/ContributorTaxInfo";
 import { TaxComplianceReport } from "./components/TaxComplianceReport";
 import { PaymentHoldManager } from "./components/PaymentHoldManager";
+import { FeatureFlagManager } from "./components/FeatureFlagManager";
 import { ContributorOnboardingChecklist } from "./components/ContributorOnboardingChecklist";
 import { MultiContractEarnings } from "./components/MultiContractEarnings";
 import { UserProfile } from "./components/UserProfile";
@@ -411,6 +422,8 @@ export default function App() {
           ),
           "Earnings Forecast",
         );
+      case "tokenomics":
+        return withErrorBoundary(<TokenomicsSimulator />, "Tokenomics Simulator");
       case "timeline":
         return withErrorBoundary(
           contractId ? (
@@ -478,6 +491,34 @@ export default function App() {
           <DisputeDashboard walletAddress={walletAddress} />,
           "Dispute Dashboard",
         );
+      case "impact":
+        return withErrorBoundary(
+          contractId ? (
+            <div className="page-section">
+              <Suspense fallback={<div className="page-empty"><p>Loading environmental impact...</p></div>}>
+                <ImpactDashboard contractId={contractId} walletAddress={walletAddress} />
+              </Suspense>
+            </div>
+          ) : (
+            <div className="page-empty">
+              <p>Please select a contract first</p>
+            </div>
+          ),
+          "Environmental Impact",
+        );
+      case "webhooks":
+        return withErrorBoundary(
+          contractId ? (
+            <div className="page-section">
+              <WebhookManager contractId={contractId} />
+            </div>
+          ) : (
+            <div className="page-empty">
+              <p>Please select a contract first</p>
+            </div>
+          ),
+          "Webhook Integrations",
+        );
       case "earnings":
         return withErrorBoundary(
           walletAddress ? (
@@ -503,6 +544,8 @@ export default function App() {
           ),
           "Contributor Suspension",
         );
+      case "feature-flags":
+        return withErrorBoundary(<FeatureFlagManager />, "Feature Flags");
       case "settings":
         return withErrorBoundary(
           <Settings
