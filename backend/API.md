@@ -259,6 +259,10 @@ If the request times out and is retried with the same `Idempotency-Key`, the sec
 | `IDEMPOTENCY_CACHE_TTL_MS` | `86400000` (24 hours) | How long to cache idempotent responses |
 | `IDEMPOTENCY_MAX_ENTRIES` | `10000` | Maximum number of cached responses before eviction |
 
+> **⚠️ Multi-process limitation:** The idempotency implementation is process-local. Both the in-flight deduplication map and the persistent response cache are stored in process memory. When the backend runs as multiple processes — including canary deployments where a second process listens on a separate port — two concurrent requests carrying the same `Idempotency-Key` that hit different processes will both be executed, defeating the deduplication guarantee.
+>
+> To restore the guarantee in multi-process deployments, set `REDIS_URL` in your environment to a shared Redis instance. Redis-backed idempotency storage is not yet implemented; this variable currently enables only the distributed response cache (see `.env.example`). Until Redis-backed idempotency is available, operators running more than one process should be aware of this gap and use a load-balancer with session affinity as a mitigation.
+
 ## Simulate Distribution
 
 ### `POST /api/v1/simulate`
